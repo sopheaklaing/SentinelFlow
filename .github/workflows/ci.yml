@@ -1,0 +1,74 @@
+
+name: SentinelFlow CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+
+  build-and-test:
+
+    runs-on: ubuntu-latest
+
+    services:
+
+      postgres:
+        image: postgres:17-alpine
+
+        env:
+          POSTGRES_DB: sentinelflow
+          POSTGRES_USER: sentinelflow
+          POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U sentinelflow -d sentinelflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      - name: Build and test
+        env:
+          SPRING_DATASOURCE_USERNAME: sentinelflow
+          SPRING_DATASOURCE_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+
+          JWT_SECRET: ${{ secrets.CI_JWT_SECRET }}
+          JWT_EXPIRATION: 86400000
+
+          APP_BOOTSTRAP_ADMIN_EMAIL: admin@sentinelflow.local
+          APP_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.CI_ADMIN_PASSWORD }}
+
+        run: ./mvnw clean test
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
