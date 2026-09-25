@@ -53,6 +53,23 @@ jobs:
       - name: Make Maven Wrapper executable
         run: chmod +x mvnw
 
+      - name: Verify PostgreSQL
+        env:
+          PGPASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+        run: |
+          pg_isready \
+            -h localhost \
+            -p 5432 \
+            -U sentinelflow \
+            -d sentinelflow
+
+          psql \
+            -h localhost \
+            -p 5432 \
+            -U sentinelflow \
+            -d sentinelflow \
+            -c "SELECT version();"
+
       - name: Build and test
         env:
           SPRING_DATASOURCE_USERNAME: sentinelflow
