@@ -13,10 +13,13 @@ on:
       - develop
 
 jobs:
+
   build-and-test:
+
     runs-on: ubuntu-latest
 
     services:
+
       postgres:
         image: postgres:17-alpine
 
@@ -35,8 +38,11 @@ jobs:
           --health-retries 5
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -60,9 +66,11 @@ jobs:
           APP_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.CI_ADMIN_PASSWORD }}
 
         run: ./mvnw clean test
+
       - name: SCA - OWASP Dependency-Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+
         run: >
           ./mvnw --batch-mode
           org.owasp:dependency-check-maven:13.0.0:check
@@ -78,7 +86,8 @@ jobs:
           path: |
             target/dependency-check-report.html
             target/dependency-check-report.json
-            - name: SAST - SonarQube
+
+      - name: SAST - SonarQube
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
