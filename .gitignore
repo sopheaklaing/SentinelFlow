@@ -33,3 +33,5 @@ build/
 .vscode/
 .env
 node.txt
+effective-pom
+effective-pom.xml
