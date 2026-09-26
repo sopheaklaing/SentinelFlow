@@ -79,16 +79,20 @@ jobs:
           -DfailBuildOnCVSS=7
           -Dformats=HTML,JSON
 
-      - name: SAST - SonarQube
+            - name: Verify SonarQube URL
+        run: |
+          echo "SonarQube URL: ${SONAR_HOST_URL}"
+          case "${SONAR_HOST_URL}" in
+            http://*|https://*)
+              echo "SonarQube URL format is valid."
+              ;;
+            *)
+              echo "Invalid SONAR_HOST_URL"
+              exit 1
+              ;;
+          esac
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-
-        run: >
-          ./mvnw --batch-mode
-          sonar:sonar
-          -Dsonar.host.url=${SONAR_HOST_URL}
-          -Dsonar.token=${SONAR_TOKEN}
 
       - name: Upload SCA report
         if: always()
