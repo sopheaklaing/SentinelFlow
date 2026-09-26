@@ -56,6 +56,7 @@ jobs:
 
       - name: Build and test
         env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/sentinelflow
           SPRING_DATASOURCE_USERNAME: sentinelflow
           SPRING_DATASOURCE_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
 
@@ -78,6 +79,17 @@ jobs:
           -DfailBuildOnCVSS=7
           -Dformats=HTML,JSON
 
+      - name: SAST - SonarQube
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+        run: >
+          ./mvnw --batch-mode
+          sonar:sonar
+          -Dsonar.host.url=${SONAR_HOST_URL}
+          -Dsonar.token=${SONAR_TOKEN}
+
       - name: Upload SCA report
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,18 +98,6 @@ jobs:
           path: |
             target/dependency-check-report.html
             target/dependency-check-report.json
-
-      - name: SAST - SonarQube
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-
-        run: >
-          ./mvnw --batch-mode
-          verify
-          sonar:sonar
-          -Dsonar.host.url=${SONAR_HOST_URL}
-          -Dsonar.token=${SONAR_TOKEN}
 
       - name: Upload test reports
         if: always()
