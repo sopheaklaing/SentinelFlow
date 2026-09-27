@@ -1,3 +1,4 @@
+
 name: SentinelFlow CI
 
 on:
@@ -12,14 +13,16 @@ on:
       - main
       - develop
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
 
   build-and-test:
-
     runs-on: ubuntu-latest
 
     services:
-
       postgres:
         image: postgres:17-alpine
 
@@ -112,20 +115,32 @@ jobs:
           -Dsonar.host.url=${SONAR_HOST_URL}
           -Dsonar.token=${SONAR_TOKEN}
 
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build Docker image
         run: |
           docker build \
-            -t sentinelflow:${{ github.sha }} \
+            -t ghcr.io/${{ github.repository }}:${{ github.sha }} \
             .
 
       - name: Container Scan - Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: sentinelflow:${{ github.sha }}
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
+
+      - name: Push Docker image to GHCR
+        run: |
+          docker push \
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
 
       - name: Upload SCA report
         if: always()
@@ -142,3 +157,33 @@ jobs:
         with:
           name: surefire-reports
           path: target/surefire-reports/
+
+
+  deploy:
+    needs: build-and-test
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_SSH_PORT }}
+
+          script: |
+            cd ~/apps/sentinelflow
+
+            export IMAGE_TAG=${{ github.sha }}
+
+            docker compose pull sentinelflow-app
+            docker compose up -d sentinelflow-app
+
+            docker image prune -f
+
+            docker compose ps
