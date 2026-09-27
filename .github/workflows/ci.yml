@@ -1,4 +1,3 @@
-
 name: SentinelFlow CI
 
 on:
@@ -13,9 +12,11 @@ on:
       - main
       - develop
 
+
 permissions:
   contents: read
   packages: write
+
 
 jobs:
 
@@ -40,17 +41,32 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+
     steps:
+
+      # -----------------------------
+      # Checkout
+      # -----------------------------
 
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+
+      # -----------------------------
+      # Secret Scan
+      # -----------------------------
+
       - name: Secret Scan - Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+      # -----------------------------
+      # Java
+      # -----------------------------
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -59,8 +75,18 @@ jobs:
           java-version: "21"
           cache: maven
 
+
+      # -----------------------------
+      # Maven
+      # -----------------------------
+
       - name: Make Maven Wrapper executable
         run: chmod +x mvnw
+
+
+      # -----------------------------
+      # Build + Test
+      # -----------------------------
 
       - name: Build and test
         env:
@@ -76,6 +102,11 @@ jobs:
 
         run: ./mvnw clean test
 
+
+      # -----------------------------
+      # SCA
+      # -----------------------------
+
       - name: SCA - OWASP Dependency-Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
@@ -86,6 +117,11 @@ jobs:
           -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
           -DfailBuildOnCVSS=7
           -Dformats=HTML,JSON
+
+
+      # -----------------------------
+      # SonarQube URL Check
+      # -----------------------------
 
       - name: Verify SonarQube URL
         env:
@@ -104,6 +140,11 @@ jobs:
               ;;
           esac
 
+
+      # -----------------------------
+      # SAST - SonarQube
+      # -----------------------------
+
       - name: SAST - SonarQube
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -115,6 +156,11 @@ jobs:
           -Dsonar.host.url=${SONAR_HOST_URL}
           -Dsonar.token=${SONAR_TOKEN}
 
+
+      # -----------------------------
+      # Docker Login - GHCR
+      # -----------------------------
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -122,25 +168,45 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+
+      # -----------------------------
+      # Docker Build
+      # -----------------------------
+
       - name: Build Docker image
         run: |
           docker build \
-            -t ghcr.io/${{ github.repository }}:${{ github.sha }} \
+            -t ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }} \
             .
+
+
+      # -----------------------------
+      # Trivy Container Scan
+      # -----------------------------
 
       - name: Container Scan - Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          image-ref: ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
 
+
+      # -----------------------------
+      # Push to GHCR
+      # -----------------------------
+
       - name: Push Docker image to GHCR
         run: |
           docker push \
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }}
+
+
+      # -----------------------------
+      # Upload SCA Report
+      # -----------------------------
 
       - name: Upload SCA report
         if: always()
@@ -151,6 +217,11 @@ jobs:
             target/dependency-check-report.html
             target/dependency-check-report.json
 
+
+      # -----------------------------
+      # Upload Test Reports
+      # -----------------------------
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -159,12 +230,17 @@ jobs:
           path: target/surefire-reports/
 
 
+  # ==================================================
+  # CD - Deploy to VPS
+  # ==================================================
+
   deploy:
     needs: build-and-test
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     runs-on: ubuntu-latest
+
 
     steps:
 
@@ -182,6 +258,7 @@ jobs:
             export IMAGE_TAG=${{ github.sha }}
 
             docker compose pull sentinelflow-app
+
             docker compose up -d sentinelflow-app
 
             docker image prune -f
