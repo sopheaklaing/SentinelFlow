@@ -299,7 +299,7 @@ jobs:
               echo "Rollback health check attempt ${i}/12..."
 
               if curl --fail --silent \
-                http://127.0.0.1:8081/api/health \
+                http://127.0.0.1:8081/api/health-test \
                 > /dev/null; then
 
                 ROLLBACK_HEALTHY=true
