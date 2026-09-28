@@ -167,12 +167,10 @@ jobs:
 
     runs-on: ubuntu-latest
 
-
     steps:
 
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.2.5
-
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -184,19 +182,159 @@ jobs:
 
             cd ~/apps/sentinelflow
 
-            export IMAGE_TAG=${{ github.sha }}
+            STATE_FILE="deployment-state"
 
-            echo "Deploying SentinelFlow image:"
-            echo "ghcr.io/sopheaklaing/sentinelflow:${IMAGE_TAG}"
+            if [ ! -f "$STATE_FILE" ]; then
+              echo "ERROR: deployment-state not found."
+              exit 1
+            fi
 
-            echo "Pulling Docker image..."
+            source "$STATE_FILE"
+
+            NEW_SHA="${{ github.sha }}"
+
+            echo "========================================"
+            echo "SentinelFlow Deployment"
+            echo "========================================"
+            echo "Current SHA : ${CURRENT_SHA}"
+            echo "Previous SHA: ${PREVIOUS_SHA}"
+            echo "New SHA     : ${NEW_SHA}"
+            echo "========================================"
+
+            # ----------------------------------------
+            # Step 1: Pull new image
+            # ----------------------------------------
+
+            export IMAGE_TAG="${NEW_SHA}"
+
+            echo "Pulling new Docker image..."
+
             docker compose pull sentinelflow-app
 
-            echo "Recreating SentinelFlow container..."
+            # ----------------------------------------
+            # Step 2: Deploy new version
+            # ----------------------------------------
+
+            echo "Deploying new version..."
+
             docker compose up -d --force-recreate sentinelflow-app
 
-            echo "Removing unused Docker images..."
-            docker image prune -f
+            # ----------------------------------------
+            # Step 3: Health check
+            # ----------------------------------------
 
-            echo "SentinelFlow containers:"
+            echo "Waiting for application health..."
+
+            HEALTHY=false
+
+            for i in {1..12}; do
+
+              echo "Health check attempt ${i}/12..."
+
+              if curl --fail --silent \
+                http://127.0.0.1:8081/api/health \
+                > /dev/null; then
+
+                HEALTHY=true
+                echo "Application health check PASSED."
+                break
+
+              fi
+
+              sleep 5
+
+            done
+
+            # ----------------------------------------
+            # Step 4: Success
+            # ----------------------------------------
+
+            if [ "$HEALTHY" = true ]; then
+
+              echo "========================================"
+              echo "DEPLOYMENT SUCCESS"
+              echo "========================================"
+
+              echo "CURRENT_SHA=${NEW_SHA}" > "$STATE_FILE"
+              echo "PREVIOUS_SHA=${CURRENT_SHA}" >> "$STATE_FILE"
+
+              echo "Deployment state updated:"
+              cat "$STATE_FILE"
+
+              echo "Cleaning unused Docker images..."
+
+              docker image prune -f
+
+              echo "Final container status:"
+              docker compose ps
+
+              exit 0
+
+            fi
+
+            # ----------------------------------------
+            # Step 5: Automatic Rollback
+            # ----------------------------------------
+
+            echo "========================================"
+            echo "DEPLOYMENT FAILED"
+            echo "Starting automatic rollback..."
+            echo "========================================"
+
+            export IMAGE_TAG="${CURRENT_SHA}"
+
+            echo "Rolling back to:"
+            echo "${CURRENT_SHA}"
+
+            docker compose pull sentinelflow-app
+
+            docker compose up -d --force-recreate sentinelflow-app
+
+            echo "Waiting for rollback health..."
+
+            ROLLBACK_HEALTHY=false
+
+            for i in {1..12}; do
+
+              echo "Rollback health check attempt ${i}/12..."
+
+              if curl --fail --silent \
+                http://127.0.0.1:8081/api/health \
+                > /dev/null; then
+
+                ROLLBACK_HEALTHY=true
+                echo "Rollback health check PASSED."
+                break
+
+              fi
+
+              sleep 5
+
+            done
+
+            if [ "$ROLLBACK_HEALTHY" = true ]; then
+
+              echo "========================================"
+              echo "ROLLBACK SUCCESS"
+              echo "========================================"
+
+              echo "CURRENT_SHA=${CURRENT_SHA}" > "$STATE_FILE"
+              echo "PREVIOUS_SHA=${PREVIOUS_SHA}" >> "$STATE_FILE"
+
+              echo "Restored deployment state:"
+              cat "$STATE_FILE"
+
+              docker compose ps
+
+              exit 1
+
+            fi
+
+            echo "========================================"
+            echo "CRITICAL: ROLLBACK FAILED"
+            echo "========================================"
+
             docker compose ps
+            docker compose logs --tail=100 sentinelflow-app
+
+            exit 1
