@@ -1,4 +1,4 @@
-name: SentinelFlow CI
+name: SentinelFlow CI/CD
 
 on:
   push:
@@ -16,14 +16,20 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: sentinelflow-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
 
   # ==========================================================
-  # CI
+  # 1. BUILD & TEST
   # ==========================================================
 
   build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -45,29 +51,12 @@ jobs:
 
     steps:
 
-      # ========================================================
-      # Checkout
-      # ========================================================
-
-      - name: Checkout source code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ========================================================
-      # Gitleaks
-      # ========================================================
-
-      - name: Secret Scan - Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ========================================================
-      # Java
-      # ========================================================
-
-      - name: Setup Java 21
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -76,10 +65,6 @@ jobs:
 
       - name: Make Maven Wrapper executable
         run: chmod +x mvnw
-
-      # ========================================================
-      # Test
-      # ========================================================
 
       - name: Build and test
         env:
@@ -93,118 +78,7 @@ jobs:
           APP_BOOTSTRAP_ADMIN_EMAIL: admin@sentinelflow.local
           APP_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.CI_ADMIN_PASSWORD }}
 
-        run: ./mvnw clean test
-
-      # ========================================================
-      # SCA
-      # ========================================================
-
-      - name: SCA - OWASP Dependency-Check
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-
-        run: >
-          ./mvnw --batch-mode
-          org.owasp:dependency-check-maven:13.0.0:check
-          -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
-          -DfailBuildOnCVSS=7
-          -Dformats=HTML,JSON
-
-      # ========================================================
-      # Verify SonarQube URL
-      # ========================================================
-
-      - name: Verify SonarQube URL
-        env:
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-
-        run: |
-          echo "SonarQube URL: ${SONAR_HOST_URL}"
-
-          case "${SONAR_HOST_URL}" in
-            http://*|https://*)
-              echo "SonarQube URL format is valid."
-              ;;
-            *)
-              echo "Invalid SONAR_HOST_URL"
-              exit 1
-              ;;
-          esac
-
-      # ========================================================
-      # SAST
-      # ========================================================
-
-      - name: SAST - SonarQube
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-
-        run: >
-          ./mvnw --batch-mode
-          sonar:sonar
-          -Dsonar.host.url=${SONAR_HOST_URL}
-          -Dsonar.token=${SONAR_TOKEN}
-
-      # ========================================================
-      # GHCR Login
-      # ========================================================
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # ========================================================
-      # Docker Build
-      # ========================================================
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }} \
-            .
-
-      # ========================================================
-      # Trivy
-      # ========================================================
-
-      - name: Container Scan - Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }}
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
-
-      # ========================================================
-      # Push GHCR
-      # ========================================================
-
-      - name: Push Docker image to GHCR
-        run: |
-          docker push \
-            ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }}
-
-      # ========================================================
-      # Upload SCA Report
-      # ========================================================
-
-      - name: Upload SCA report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-check-report
-          path: |
-            target/dependency-check-report.html
-            target/dependency-check-report.json
-
-      # ========================================================
-      # Upload Test Reports
-      # ========================================================
+        run: ./mvnw --batch-mode clean test
 
       - name: Upload test reports
         if: always()
@@ -215,19 +89,146 @@ jobs:
 
 
   # ==========================================================
-  # CD / DEPLOY
+  # 2. SECURITY ANALYSIS
+  # ==========================================================
+
+  security:
+    name: Security Analysis
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      - name: OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+
+        run: >
+          ./mvnw --batch-mode
+          org.owasp:dependency-check-maven:13.0.0:check
+          -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+          -DfailBuildOnCVSS=7
+          -Dformats=HTML,JSON
+
+      - name: Upload Dependency-Check reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: |
+            target/dependency-check-report.html
+            target/dependency-check-report.json
+
+      - name: Verify SonarQube URL
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+        run: |
+          case "${SONAR_HOST_URL}" in
+            http://*|https://*)
+              ;;
+            *)
+              echo "Invalid SONAR_HOST_URL"
+              exit 1
+              ;;
+          esac
+
+      - name: SonarQube SAST
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+        run: >
+          ./mvnw --batch-mode
+          sonar:sonar
+          -Dsonar.host.url=${SONAR_HOST_URL}
+          -Dsonar.token=${SONAR_TOKEN}
+
+
+  # ==========================================================
+  # 3. DOCKER BUILD & CONTAINER SECURITY
+  # ==========================================================
+
+  docker-security:
+    name: Docker Build & Trivy
+    needs: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }} \
+            .
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Push Docker image
+        run: |
+          docker push \
+            ghcr.io/${{ github.repository_owner }}/sentinelflow:${{ github.sha }}
+
+
+  # ==========================================================
+  # 4. DEPLOY TO PRODUCTION
   # ==========================================================
 
   deploy:
-    needs: build-and-test
+    name: Deploy to VPS
+    needs: docker-security
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    concurrency:
+      group: sentinelflow-production
+      cancel-in-progress: false
 
     steps:
 
-      - name: Deploy to VPS
+      - name: Deploy
         uses: appleboy/ssh-action@v1.2.5
 
         with:
@@ -244,75 +245,29 @@ jobs:
 
             STATE_FILE="deployment-state"
 
-            # ==================================================
-            # Verify deployment state
-            # ==================================================
-
             if [ ! -f "$STATE_FILE" ]; then
-
-              echo "ERROR: deployment-state not found."
-
               exit 1
-
             fi
 
             source "$STATE_FILE"
 
             NEW_SHA="${{ github.sha }}"
 
-            echo "========================================"
-            echo "SentinelFlow Deployment"
-            echo "========================================"
-
-            echo "Current SHA : ${CURRENT_SHA}"
-            echo "Previous SHA: ${PREVIOUS_SHA}"
-            echo "New SHA     : ${NEW_SHA}"
-
-            echo "========================================"
-
-
-            # ==================================================
-            # Step 1: Pull NEW image
-            # ==================================================
-
             export IMAGE_TAG="${NEW_SHA}"
-
-            echo "Pulling new Docker image..."
 
             docker compose pull sentinelflow-app
 
-
-            # ==================================================
-            # Step 2: Deploy NEW version
-            # ==================================================
-
-            echo "Deploying new version..."
-
             docker compose up -d --force-recreate sentinelflow-app
-
-
-            # ==================================================
-            # Step 3: NEW deployment health check
-            #
-            # INTENTIONALLY BROKEN FOR ROLLBACK TEST
-            # ==================================================
-
-            echo "Waiting for application health..."
 
             HEALTHY=false
 
             for i in {1..12}; do
 
-              echo "Health check attempt ${i}/12..."
-
               if curl --fail --silent \
-                http://127.0.0.1:8081/api/health-test \
+                http://127.0.0.1:8081/api/health \
                 > /dev/null; then
 
                 HEALTHY=true
-
-                echo "Application health check PASSED."
-
                 break
 
               fi
@@ -321,29 +276,10 @@ jobs:
 
             done
 
-
-            # ==================================================
-            # Step 4: Deployment SUCCESS
-            # ==================================================
-
             if [ "$HEALTHY" = true ]; then
-
-              echo "========================================"
-              echo "DEPLOYMENT SUCCESS"
-              echo "========================================"
 
               echo "CURRENT_SHA=${NEW_SHA}" > "$STATE_FILE"
               echo "PREVIOUS_SHA=${CURRENT_SHA}" >> "$STATE_FILE"
-
-              echo "Deployment state updated:"
-
-              cat "$STATE_FILE"
-
-              echo "Cleaning unused Docker images..."
-
-              docker image prune -f
-
-              echo "Final container status:"
 
               docker compose ps
 
@@ -351,63 +287,21 @@ jobs:
 
             fi
 
-
-            # ==================================================
-            # Step 5: AUTOMATIC ROLLBACK
-            # ==================================================
-
-            echo "========================================"
-            echo "DEPLOYMENT FAILED"
-            echo "Starting automatic rollback..."
-            echo "========================================"
-
-
-            # Roll back to CURRENT production SHA
-
             export IMAGE_TAG="${CURRENT_SHA}"
-
-            echo "Rolling back to:"
-
-            echo "${CURRENT_SHA}"
-
-
-            # ==================================================
-            # Pull OLD image
-            # ==================================================
 
             docker compose pull sentinelflow-app
 
-
-            # ==================================================
-            # Start OLD version
-            # ==================================================
-
             docker compose up -d --force-recreate sentinelflow-app
-
-
-            # ==================================================
-            # Rollback health check
-            #
-            # IMPORTANT:
-            # This one MUST use the real endpoint.
-            # ==================================================
-
-            echo "Waiting for rollback health..."
 
             ROLLBACK_HEALTHY=false
 
             for i in {1..12}; do
-
-              echo "Rollback health check attempt ${i}/12..."
 
               if curl --fail --silent \
                 http://127.0.0.1:8081/api/health \
                 > /dev/null; then
 
                 ROLLBACK_HEALTHY=true
-
-                echo "Rollback health check PASSED."
-
                 break
 
               fi
@@ -416,46 +310,18 @@ jobs:
 
             done
 
-
-            # ==================================================
-            # Step 6: Rollback SUCCESS
-            # ==================================================
-
             if [ "$ROLLBACK_HEALTHY" = true ]; then
-
-              echo "========================================"
-              echo "ROLLBACK SUCCESS"
-              echo "========================================"
 
               echo "CURRENT_SHA=${CURRENT_SHA}" > "$STATE_FILE"
               echo "PREVIOUS_SHA=${PREVIOUS_SHA}" >> "$STATE_FILE"
 
-              echo "Restored deployment state:"
-
-              cat "$STATE_FILE"
-
-              echo "Container status:"
-
               docker compose ps
-
-              # Deployment failed, but rollback succeeded.
-              # exit 1 intentionally marks deployment as failed.
 
               exit 1
 
             fi
 
-
-            # ==================================================
-            # Step 7: Rollback FAILED
-            # ==================================================
-
-            echo "========================================"
-            echo "CRITICAL: ROLLBACK FAILED"
-            echo "========================================"
-
             docker compose ps
-
             docker compose logs --tail=100 sentinelflow-app
 
             exit 1
