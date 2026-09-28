@@ -303,6 +303,7 @@ jobs:
                 > /dev/null; then
 
                 ROLLBACK_HEALTHY=true
+                
                 echo "Rollback health check PASSED."
                 break
 
